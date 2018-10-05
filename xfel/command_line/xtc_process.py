@@ -119,7 +119,7 @@ xtc_phil_str = '''
       .type = str
       .help = Experiment identifier, e.g. cxi84914
     run_num = None
-      .type = int
+      .type = str
       .help = Run number or run range to process
     address = None
       .type = str
@@ -702,6 +702,17 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
     else:
       max_events = params.dispatch.max_events
 
+    # Get the total number of runs to process by parsing the run_num phil parameter
+    # Note that the format hopefully will be as given here
+    # https://confluence.slac.stanford.edu/display/PSDM/Manual#Manual-Datasetspecification
+    run_count = 0
+    all_runs = []
+    xrun_num = params.input.run_num.strip().split(',')
+    for x in xrun_num:
+      all_runs.extend([int(z) for z in x.split('-')])
+    total_runs = len(list(set(all_runs)))
+    print 'TOTAL_RUNS',total_runs
+
     for run in ds.runs():
       if params.format.file_format == "cbf":
         if params.format.cbf.mode == "cspad":
@@ -757,6 +768,7 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
       # list of all events
       # only cycle through times in client_server mode
       if params.mp.method == "mpi" and params.mp.mpi.method == 'client_server' and size > 2:
+        run_count += 1
         # process fractions only works in idx-striping mode
         if params.dispatch.process_percent:
           raise Sorry("Process percent only works in striping mode.")
@@ -777,13 +789,14 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
               self.mpi_log_write("Process %s is ready, sending ts %s\n"%(rankreq, ts))
               comm.send(EventOffsetSerializer(offset),dest=rankreq)
             # send a stop command to each process
-            self.mpi_log_write("MPI DONE, sending stops\n")
-            for rankreq in range(size-1):
-              self.mpi_log_write("Getting next available process\n")
-              rankreq = comm.recv(source=MPI.ANY_SOURCE)
-              self.mpi_log_write("Sending stop to %d\n"%rankreq)
-              comm.send('endrun',dest=rankreq)
-            self.mpi_log_write("All stops sent.")
+            if run_count == total_runs:
+              self.mpi_log_write("MPI DONE, sending stops\n")
+              for rankreq in range(size-1):
+                self.mpi_log_write("Getting next available process\n")
+                rankreq = comm.recv(source=MPI.ANY_SOURCE)
+                self.mpi_log_write("Sending stop to %d\n"%rankreq)
+                comm.send('endrun',dest=rankreq)
+              self.mpi_log_write("All stops sent.")
           else:
             # client process
             while True:
@@ -806,7 +819,7 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
           print "Error caught in main loop"
           print str(e)
         print "Synchronizing rank %d"%rank
-        comm.Barrier()
+        #comm.Barrier()
         print "Rank %d done with main loop"%rank
       else:
         import resource
@@ -839,6 +852,7 @@ class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
           last = mem
         print 'Total memory leaked in %d cycles: %dkB' % (nevent+1-50, mem - first)
 
+    comm.Barrier()
     print "Rank %d finalizing"%rank
     try:
       self.finalize()
